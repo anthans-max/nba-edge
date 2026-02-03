@@ -1,0 +1,17 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+name: nba-edge-features
+display_name: nba-edge-features
+experiment_name: nba-edge
+code: ../..
+command: >-
+  python features/build_features.py
+environment: azureml:nba-edge-env:1
+compute: azureml:CPU_CLUSTER_NAME_PLACEHOLDER
+inputs:
+  raw_data_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/raw/
+outputs:
+  features_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/features/

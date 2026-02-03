@@ -1,0 +1,51 @@
+$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
+type: pipeline
+name: nba-edge-pipeline
+display_name: nba-edge-pipeline
+experiment_name: nba-edge
+
+defaults:
+  compute: azureml:CPU_CLUSTER_NAME_PLACEHOLDER
+
+jobs:
+  feature_job:
+    type: command
+    code: .
+    command: >-
+      python features/build_features.py
+    environment: azureml:nba-edge-env:1
+    inputs:
+      raw_data_path:
+        type: uri_folder
+        path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/raw/
+    outputs:
+      features_path:
+        type: uri_folder
+        path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/features/
+
+  train_job:
+    type: command
+    code: .
+    command: >-
+      python train/train_margin_model.py
+    environment: azureml:nba-edge-env:1
+    inputs:
+      features_path: ${{parent.jobs.feature_job.outputs.features_path}}
+    outputs:
+      model_path:
+        type: uri_folder
+        path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/models/
+
+  backtest_job:
+    type: command
+    code: .
+    command: >-
+      python train/backtest.py
+    environment: azureml:nba-edge-env:1
+    inputs:
+      model_path: ${{parent.jobs.train_job.outputs.model_path}}
+      features_path: ${{parent.jobs.feature_job.outputs.features_path}}
+    outputs:
+      backtest_path:
+        type: uri_folder
+        path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/backtests/

@@ -1,0 +1,15 @@
+pandas
+numpy
+pyarrow
+nba_api
+requests
+scikit-learn
+streamlit
+google-generativeai
+azure-storage-blob
+azure-identity
+azure-ai-ml
+ruff
+black
+pre-commit
+python-dotenv

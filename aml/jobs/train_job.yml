@@ -1,0 +1,17 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+name: nba-edge-train
+display_name: nba-edge-train
+experiment_name: nba-edge
+code: ../..
+command: >-
+  python train/train_margin_model.py
+environment: azureml:nba-edge-env:1
+compute: azureml:CPU_CLUSTER_NAME_PLACEHOLDER
+inputs:
+  features_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/features/
+outputs:
+  model_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/models/

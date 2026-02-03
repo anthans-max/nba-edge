@@ -1,0 +1,20 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+name: nba-edge-backtest
+display_name: nba-edge-backtest
+experiment_name: nba-edge
+code: ../..
+command: >-
+  python train/backtest.py
+environment: azureml:nba-edge-env:1
+compute: azureml:CPU_CLUSTER_NAME_PLACEHOLDER
+inputs:
+  model_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/models/
+  features_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/features/
+outputs:
+  backtest_path:
+    type: uri_folder
+    path: azureml://datastores/DATASTORE_NAME_PLACEHOLDER/paths/backtests/

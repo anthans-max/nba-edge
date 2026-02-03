@@ -1,0 +1,13 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: nba-edge-env
+version: 1
+image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04
+conda_file: |
+  name: nba-edge
+  channels:
+    - conda-forge
+  dependencies:
+    - python=3.11
+    - pip
+    - pip:
+        - -r requirements.txt
