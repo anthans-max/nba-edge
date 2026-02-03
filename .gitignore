@@ -1,28 +1,8 @@
-# Python
-__pycache__/
-*.py[cod]
-*.egg-info/
+cat > .gitignore << 'EOF'
 .venv/
-venv/
-
-# Environment
-.env
-.env.*
-
-# Data/artifacts
-/data/
-artifacts/
-outputs/
-mlruns/
-
-# Logs
-*.log
-
-# Jupyter
-.ipynb_checkpoints/
-
-# OS
+__pycache__/
+*.pyc
 .DS_Store
-
-# Azure
-.azure/
+.streamlit/secrets.toml
+.env
+EOF
