@@ -16,7 +16,8 @@ from azure_blob import (
     read_parquet_from_blob,
     render_exception,
 )
-from llm_chat import chat_with_context
+from common.team_normalization import normalize_games_df
+from llm_chat import chat_with_context, get_gemini_model_name
 
 
 @st.cache_data(show_spinner=False)
@@ -24,16 +25,12 @@ def load_games(season: int) -> pd.DataFrame:
     prefix = lake_prefix()
     blob_name = f"{prefix}silver/games/season={season}/games.parquet"
     df = read_parquet_from_blob(blob_name)
-    df = df.copy()
-    df.columns = [str(c).lower() for c in df.columns]
-    assert "team_abbr" in df.columns, f"team_abbr missing; columns={df.columns.tolist()}"
-    df["team_abbr"] = (
-        df["team_abbr"]
-        .astype("string")
-        .str.strip()
-        .replace({"None": None, "nan": None, "NaN": None, "NULL": None, "": None})
-    )
-    df["season"] = df["season"].astype(int)
+    result = normalize_games_df(df)
+    df = result.df
+    df.attrs["team_abbr_source"] = result.source_column
+    df.attrs["team_abbr_distinct"] = result.distinct_teams
+    if "season" in df.columns:
+        df["season"] = pd.to_numeric(df["season"], errors="coerce").astype("Int64")
     df["game_date"] = pd.to_datetime(df.get("game_date"), errors="coerce")
     df["pts"] = pd.to_numeric(df.get("pts"), errors="coerce")
     df["plus_minus"] = pd.to_numeric(df.get("plus_minus"), errors="coerce")
@@ -173,35 +170,51 @@ def render_chat_panel(context_packet: dict | None, team_a: str, team_b: str) -> 
     st.subheader("Ask the Model")
     st.caption("Answers are grounded in the current matchup's recent-form data and prediction.")
     api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    model_name = get_gemini_model_name()
 
     if not api_key:
-        st.info("Chat disabled. Set GEMINI_API_KEY to enable the assistant.")
+        st.info("Gemini: disabled (set GEMINI_API_KEY to enable)")
+    else:
+        st.success(f"Gemini: enabled ({model_name})")
+
     if context_packet is None:
         st.info("Select teams and click Predict to enable chat context.")
+
     if not api_key:
-        return
-    if context_packet is None:
         return
 
     if "chat_messages" not in st.session_state:
         st.session_state["chat_messages"] = []
 
+    buttons_disabled = context_packet is None
     chip_cols = st.columns(2)
-    if chip_cols[0].button(f"Why is {team_a} favored?"):
-        st.session_state["pending_user_message"] = f"Why is {team_a} favored?"
-    if chip_cols[1].button("What are the top 3 factors?"):
-        st.session_state["pending_user_message"] = "What are the top 3 factors?"
-    if chip_cols[0].button("How much did home court matter?"):
-        st.session_state["pending_user_message"] = "How much did home court matter?"
-    if chip_cols[1].button("Summarize both teams' last 10 games form."):
-        st.session_state["pending_user_message"] = "Summarize both teams' last 10 games form."
+    if chip_cols[0].button(f"Why is {team_a} favored?", disabled=buttons_disabled):
+        st.session_state["pending_chat_question"] = f"Why is {team_a} favored?"
+        st.rerun()
+    if chip_cols[1].button("What are the top 3 factors?", disabled=buttons_disabled):
+        st.session_state["pending_chat_question"] = "What are the top 3 factors?"
+        st.rerun()
+    if chip_cols[0].button("How much did home court matter?", disabled=buttons_disabled):
+        st.session_state["pending_chat_question"] = "How much did home court matter?"
+        st.rerun()
+    if chip_cols[1].button(
+        "Summarize both teams' last 10 games form.",
+        disabled=buttons_disabled,
+    ):
+        st.session_state["pending_chat_question"] = (
+            "Summarize both teams' last 10 games form."
+        )
+        st.rerun()
 
     for msg in st.session_state["chat_messages"]:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    pending = st.session_state.pop("pending_user_message", None)
-    user_input = st.chat_input("Ask a question about this matchup")
+    pending = st.session_state.pop("pending_chat_question", None)
+    user_input = st.chat_input(
+        "Ask a question about this matchup",
+        disabled=context_packet is None,
+    )
     if pending and not user_input:
         user_input = pending
 
@@ -276,6 +289,8 @@ def main() -> None:
         st.write({"selected_season": selected_season, "type": type(selected_season)})
         st.write("df.shape:", games_df.shape if games_df is not None else None)
         st.write("df_season.shape:", df_season.shape if df_season is not None else None)
+        if games_df is not None:
+            st.write("team_abbr_source:", games_df.attrs.get("team_abbr_source"))
         if df_season is not None and "team_abbr" in df_season.columns:
             st.write(
                 "Distinct team_abbr (filtered):",
@@ -293,8 +308,8 @@ def main() -> None:
     if df_season is not None and "team_abbr" in df_season.columns:
         teams = sorted(df_season["team_abbr"].dropna().unique().tolist())
 
-    team_a = teams[0] if teams else ""
-    team_b = teams[1] if len(teams) > 1 else ""
+    team_a = ""
+    team_b = ""
     team_a_is_home = True
     prediction: dict[str, Any] | None = None
     why_factors: list[dict] = []
@@ -302,6 +317,9 @@ def main() -> None:
     team_b_form: dict[str, Any] | None = None
     team_a_recent: list[dict] = []
     team_b_recent: list[dict] = []
+    stored_context = st.session_state.get("matchup_context_packet")
+    stored_key = st.session_state.get("matchup_key")
+    current_key: str | None = None
 
     with col_left:
         if load_error is not None:
@@ -309,10 +327,25 @@ def main() -> None:
         elif not teams:
             st.warning("No teams found for this season.")
         else:
-            team_a = st.selectbox("Team A", teams, index=0)
-            team_b = st.selectbox("Team B", teams, index=1 if len(teams) > 1 else 0)
+            team_a = st.selectbox(
+                "Team A",
+                teams,
+                index=None,
+                placeholder="Select team A",
+            )
+            team_b = st.selectbox(
+                "Team B",
+                teams,
+                index=None,
+                placeholder="Select team B",
+            )
             team_a_is_home = st.toggle("Team A is home", value=True)
-            predict = st.button("Predict")
+            can_predict = bool(team_a and team_b)
+            predict = st.button("Predict", disabled=not can_predict)
+            if can_predict:
+                current_key = (
+                    f"{selected_season}-{window}-{team_a}-{team_b}-{team_a_is_home}"
+                )
 
             if predict and team_a == team_b:
                 st.warning("Pick two different teams to compute a matchup.")
@@ -370,11 +403,46 @@ def main() -> None:
             },
         }
 
-    context_key = f"{selected_season}-{window}-{team_a}-{team_b}-{team_a_is_home}"
+    if current_key is None and team_a and team_b:
+        current_key = f"{selected_season}-{window}-{team_a}-{team_b}-{team_a_is_home}"
+
+    if current_key and stored_key and current_key != stored_key:
+        st.session_state["matchup_has_context"] = False
+        st.session_state["matchup_context_packet"] = None
+        stored_context = None
+        stored_key = current_key
+        st.session_state["matchup_key"] = current_key
+
+    if context_packet is not None:
+        st.session_state["matchup_has_context"] = True
+        st.session_state["matchup_context_packet"] = context_packet
+        st.session_state["matchup_key"] = current_key
+        stored_context = context_packet
+        stored_key = current_key
+
+    if context_packet is None and stored_context is not None and current_key == stored_key:
+        context_packet = stored_context
+
+    context_key = current_key or f"{selected_season}-{window}-{team_a}-{team_b}-{team_a_is_home}"
     init_chat_state(context_key)
 
     with col_right:
         render_chat_panel(context_packet, team_a, team_b)
+
+        with st.expander("Debug: Matchup Context", expanded=False):
+            st.write(
+                {
+                    "matchup_key": st.session_state.get("matchup_key"),
+                    "matchup_has_context": st.session_state.get("matchup_has_context"),
+                    "has_context_packet": bool(
+                        st.session_state.get("matchup_context_packet")
+                    ),
+                    "pending_chat_question": st.session_state.get(
+                        "pending_chat_question"
+                    ),
+                    "chat_messages_len": len(st.session_state.get("chat_messages", [])),
+                }
+            )
 
 
 if __name__ == "__main__":

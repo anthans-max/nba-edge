@@ -20,15 +20,21 @@ Do not query external systems or run code. If asked for info not in context_pack
 state that it is not available in this V1 and suggest changing season, window, or teams,
 or using the Backtest page. Use plain English, concise, stakeholder-friendly tone."""
 
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+
+
+def get_gemini_model_name() -> str:
+    return os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
 
 @st.cache_resource
-def build_gemini_client(api_key: str):
+def build_gemini_client(api_key: str, model_name: str):
     """Build and cache a Gemini client."""
     if genai is None:
         raise RuntimeError("google-generativeai is not installed.")
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name=model_name,
         system_instruction=SYSTEM_PROMPT,
     )
 
@@ -53,7 +59,7 @@ def chat_with_context(messages: Iterable[dict], context_packet: dict) -> str:
     if genai is None:
         return "Chat is disabled. Install google-generativeai to enable it."
 
-    model = build_gemini_client(api_key)
+    model = build_gemini_client(api_key, get_gemini_model_name())
     context_json = json.dumps(context_packet, indent=2, default=str)
     conversation = _format_messages(messages)
 

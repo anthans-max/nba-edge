@@ -1,11 +1,11 @@
 SHELL := /bin/sh
 
-VENV_DIR := .venv
+VENV_DIR := $(shell [ -d ".venv" ] && echo ".venv" || ( [ -d ".ven" ] && echo ".ven" || echo ".venv"))
 VENV_BIN := $(VENV_DIR)/bin
 PYTHON := $(shell [ -x "$(VENV_BIN)/python" ] && echo "$(VENV_BIN)/python" || command -v python3)
 PIP := $(PYTHON) -m pip
 
-.PHONY: help venv install doctor print-python ingest-nba ingest-odds transform transform-odds features train backtest app pipeline format lint
+.PHONY: help venv install doctor print-python ingest-nba ingest-odds transform transform-odds features train backtest app pipeline format lint smoke
 
 help:
 	@echo "Available targets:"
@@ -19,6 +19,7 @@ help:
 	@echo "  train        Train model"
 	@echo "  backtest     Run backtests"
 	@echo "  app          Run Streamlit app"
+	@echo "  smoke        Run matchup explorer smoke test"
 	@echo "  pipeline     Run full pipeline"
 	@echo "  format       Format code (if tooling exists)"
 	@echo "  lint         Lint code (if tooling exists)"
@@ -26,7 +27,8 @@ help:
 	@echo "  doctor       Check Python, pip, and requests"
 
 print-python:
-	@echo "$(PYTHON)"
+	@echo "VENV_DIR: $(VENV_DIR)"
+	@echo "PYTHON: $(PYTHON)"
 
 doctor:
 	@echo "Python: $(PYTHON)"
@@ -75,6 +77,9 @@ backtest:
 
 app:
 	@$(PYTHON) -m streamlit run app/app.py
+
+smoke:
+	@$(PYTHON) scripts/smoke_matchup.py
 
 pipeline: ingest-nba ingest-odds transform transform-odds features train backtest
 
