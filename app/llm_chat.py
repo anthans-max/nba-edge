@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 from typing import Iterable
 
 import streamlit as st
 
+from settings import get_setting
 try:
     import google.generativeai as genai
 except ImportError:  # pragma: no cover - handled by dependency install
@@ -22,13 +22,13 @@ or using the Backtest page. Use plain English, concise, stakeholder-friendly ton
 
 
 @st.cache_resource
-def build_gemini_client(api_key: str):
+def build_gemini_client(api_key: str, model_name: str):
     """Build and cache a Gemini client."""
     if genai is None:
         raise RuntimeError("google-generativeai is not installed.")
     genai.configure(api_key=api_key)
     return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name=model_name,
         system_instruction=SYSTEM_PROMPT,
     )
 
@@ -47,13 +47,14 @@ def _format_messages(messages: Iterable[dict]) -> str:
 
 def chat_with_context(messages: Iterable[dict], context_packet: dict) -> str:
     """Send a grounded prompt to Gemini and return the assistant response."""
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    api_key = str(get_setting("GEMINI_API_KEY", "")).strip()
     if not api_key:
-        return "Chat is disabled. Set GEMINI_API_KEY to enable it."
+        return "Chat unavailable (API key not configured)."
     if genai is None:
         return "Chat is disabled. Install google-generativeai to enable it."
 
-    model = build_gemini_client(api_key)
+    model_name = str(get_setting("GEMINI_MODEL", "gemini-2.5-flash-lite")).strip()
+    model = build_gemini_client(api_key, model_name)
     context_json = json.dumps(context_packet, indent=2, default=str)
     conversation = _format_messages(messages)
 
