@@ -51,6 +51,10 @@ make pipeline
 ```
 
 Note: set `GEMINI_API_KEY` to enable the Ask Lucky chat assistant in the Streamlit app.
+You can also use Streamlit secrets: copy `.streamlit/secrets.toml.example` to
+`.streamlit/secrets.toml`, paste your key, then run `make app`.
+V1 UI uses a single-screen layout in `app/app.py`; the Streamlit pages directory is
+disabled (renamed to `app/_pages_disabled`) to avoid multipage navigation.
 
 ## Azure ML (v2) quickstart
 ```

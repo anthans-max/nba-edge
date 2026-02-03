@@ -5,7 +5,7 @@ VENV_BIN := $(VENV_DIR)/bin
 PYTHON := $(shell [ -x "$(VENV_BIN)/python" ] && echo "$(VENV_BIN)/python" || command -v python3)
 PIP := $(PYTHON) -m pip
 
-.PHONY: help venv install doctor print-python ingest-nba ingest-odds transform transform-odds features train backtest app pipeline format lint
+.PHONY: help venv install doctor print-python ingest-nba ingest-odds transform transform-odds features train backtest app app-clean pipeline format lint smoke loop run-app kill-app tail-app
 
 help:
 	@echo "Available targets:"
@@ -19,6 +19,12 @@ help:
 	@echo "  train        Train model"
 	@echo "  backtest     Run backtests"
 	@echo "  app          Run Streamlit app"
+	@echo "  app-clean    Kill port 8501 listener then run Streamlit app"
+	@echo "  loop         Run dev loop (smoke + app)"
+	@echo "  run-app      Launch Streamlit app in background"
+	@echo "  kill-app     Stop Streamlit app"
+	@echo "  tail-app     Tail Streamlit log"
+	@echo "  smoke        Run smoke tests"
 	@echo "  pipeline     Run full pipeline"
 	@echo "  format       Format code (if tooling exists)"
 	@echo "  lint         Lint code (if tooling exists)"
@@ -75,6 +81,25 @@ backtest:
 
 app:
 	@$(PYTHON) -m streamlit run app/app.py
+
+app-clean:
+	@lsof -ti :8501 | xargs -r kill -9 || true
+	@$(PYTHON) -m streamlit run app/app.py
+
+smoke:
+	@$(PYTHON) -m pytest -q -k smoke
+
+loop:
+	@scripts/dev_loop.sh
+
+run-app:
+	@scripts/run_app.sh
+
+kill-app:
+	@scripts/kill_app.sh
+
+tail-app:
+	@tail -f .run/streamlit.log
 
 pipeline: ingest-nba ingest-odds transform transform-odds features train backtest
 

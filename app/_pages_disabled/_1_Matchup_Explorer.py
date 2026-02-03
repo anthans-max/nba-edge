@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Any
 
 import pandas as pd
@@ -17,6 +16,7 @@ from azure_blob import (
     render_exception,
 )
 from llm_chat import chat_with_context
+from settings import get_setting
 
 
 @st.cache_data(show_spinner=False)
@@ -172,13 +172,13 @@ def init_chat_state(context_key: str) -> None:
 def render_chat_panel(context_packet: dict | None, team_a: str, team_b: str) -> None:
     st.subheader("Ask the Model")
     st.caption("Answers are grounded in the current matchup's recent-form data and prediction.")
-    api_key = os.getenv("GEMINI_API_KEY", "").strip()
+    api_key = str(get_setting("GEMINI_API_KEY", "")).strip()
 
     if not api_key:
-        st.info("Chat disabled. Set GEMINI_API_KEY to enable the assistant.")
+        st.info("Chat unavailable (API key not configured).")
+        return
     if context_packet is None:
         st.info("Select teams and click Predict to enable chat context.")
-    if not api_key:
         return
     if context_packet is None:
         return
