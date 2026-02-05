@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+import io
 import os
 
+import pandas as pd
 from dotenv import load_dotenv
+
+from common.blob import download_bytes
 
 
 load_dotenv()
@@ -59,3 +63,7 @@ class Config:
 
     def backtests_path(self) -> str:
         return _join_path(self.BLOB_PREFIX, "reports", "backtests")
+
+    def read_parquet(self, blob_name: str) -> pd.DataFrame:
+        data = download_bytes(self.BLOB_CONTAINER, blob_name)
+        return pd.read_parquet(io.BytesIO(data))
