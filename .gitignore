@@ -1,10 +1,9 @@
-cat > .gitignore << 'EOF'
-.ven/
 .venv/
 __pycache__/
 *.pyc
 .DS_Store
-.streamlit/secrets.toml
 .env
-EOF
-
+.run/
+.streamlit/
+streamlit.log
+.streamlit/secrets.toml

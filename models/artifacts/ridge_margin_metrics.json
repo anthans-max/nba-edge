@@ -1,0 +1,92 @@
+{
+  "created_at": "2026-02-04T17:38:57.764655+00:00",
+  "train_seasons": [
+    2022,
+    2023,
+    2024
+  ],
+  "test_seasons": [
+    2025
+  ],
+  "feature_columns": [
+    "is_home",
+    "games_played_to_date",
+    "margin_avg_last_5",
+    "margin_avg_last_10",
+    "pts_for_avg_last_5",
+    "pts_against_avg_last_5",
+    "win_rate_last_5",
+    "rest_days"
+  ],
+  "feature_count": 8,
+  "mae": 11.875294496571465,
+  "rmse": 15.01758071590622,
+  "top_positive_coefficients": [
+    {
+      "feature": "margin_avg_last_10",
+      "coefficient": 3.3969786791896905
+    },
+    {
+      "feature": "is_home",
+      "coefficient": 2.1261633116209664
+    },
+    {
+      "feature": "rest_days",
+      "coefficient": 0.5506956419684137
+    },
+    {
+      "feature": "margin_avg_last_5",
+      "coefficient": 0.37867194439455293
+    },
+    {
+      "feature": "pts_for_avg_last_5",
+      "coefficient": 0.06916374324365426
+    },
+    {
+      "feature": "games_played_to_date",
+      "coefficient": -0.010109520388530496
+    },
+    {
+      "feature": "win_rate_last_5",
+      "coefficient": -0.04459158285834618
+    },
+    {
+      "feature": "pts_against_avg_last_5",
+      "coefficient": -0.1521997699178256
+    }
+  ],
+  "top_negative_coefficients": [
+    {
+      "feature": "pts_against_avg_last_5",
+      "coefficient": -0.1521997699178256
+    },
+    {
+      "feature": "win_rate_last_5",
+      "coefficient": -0.04459158285834618
+    },
+    {
+      "feature": "games_played_to_date",
+      "coefficient": -0.010109520388530496
+    },
+    {
+      "feature": "pts_for_avg_last_5",
+      "coefficient": 0.06916374324365426
+    },
+    {
+      "feature": "margin_avg_last_5",
+      "coefficient": 0.37867194439455293
+    },
+    {
+      "feature": "rest_days",
+      "coefficient": 0.5506956419684137
+    },
+    {
+      "feature": "is_home",
+      "coefficient": 2.1261633116209664
+    },
+    {
+      "feature": "margin_avg_last_10",
+      "coefficient": 3.3969786791896905
+    }
+  ]
+}
