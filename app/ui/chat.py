@@ -28,24 +28,29 @@ def render_chat(context_packet: dict | None, team_a: str, team_b: str) -> None:
         st.write("matchup_signature:", st.session_state.get("matchup_signature"))
 
     context_packet = st.session_state.get("matchup_ctx") or context_packet
-    if st.session_state.get("matchup_context") is None:
+    has_prediction = st.session_state.get("matchup_context") is not None
+    if not has_prediction:
         st.info("Run a prediction on the Matchup tab first.")
 
     if "chat_messages" not in st.session_state:
         st.session_state["chat_messages"] = []
 
-    chip_cols = st.columns(2)
-    if chip_cols[0].button(f"Why is {team_a} favored?"):
-        st.session_state["chat_draft"] = f"Why is {team_a} favored?"
-    if chip_cols[1].button("What are the top 3 factors?"):
-        st.session_state["chat_draft"] = "What are the top 3 factors?"
-    if chip_cols[0].button("How much did home court matter?"):
-        st.session_state["chat_draft"] = "How much did home court matter?"
-    if chip_cols[1].button("Summarize both teams' last 10 games form."):
-        st.session_state["chat_draft"] = "Summarize both teams' last 10 games form."
+    if has_prediction:
+        chip_cols = st.columns(2)
+        if chip_cols[0].button(f"Why is {team_a} favored?"):
+            st.session_state["chat_draft"] = f"Why is {team_a} favored?"
+        if chip_cols[1].button("What are the top 3 factors?"):
+            st.session_state["chat_draft"] = "What are the top 3 factors?"
+        if chip_cols[0].button("How much did home court matter?"):
+            st.session_state["chat_draft"] = "How much did home court matter?"
+        if chip_cols[1].button("Summarize both teams' last 10 games form."):
+            st.session_state["chat_draft"] = "Summarize both teams' last 10 games form."
 
     pending = st.session_state.pop("chat_draft", None)
-    user_input = st.chat_input("Ask a question about this matchup")
+    user_input = st.chat_input(
+        "Ask a question about this matchup",
+        disabled=not has_prediction,
+    )
     if pending and not user_input:
         user_input = pending
 

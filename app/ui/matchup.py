@@ -581,8 +581,6 @@ def render_matchup(
     team_b: int | None,
     team_a_is_home: bool,
     window: int,
-    show_summaries: bool,
-    show_recent: bool,
     predict: bool,
     matchup_signature: tuple[int, int, int | None, int | None],
 ) -> dict | None:

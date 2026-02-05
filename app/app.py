@@ -175,9 +175,6 @@ def main() -> None:
             team_a = None
             team_b = None
         team_a_is_home = st.toggle("Team A is home", value=True, disabled=not teams)
-        with st.expander("Options"):
-            show_summaries = st.checkbox("Show team summaries", value=True)
-            show_recent = st.checkbox("Show recent games", value=True)
         predict = st.button(
             "Predict",
             type="primary",
@@ -219,8 +216,6 @@ def main() -> None:
             team_b=team_b,
             team_a_is_home=team_a_is_home,
             window=window,
-            show_summaries=show_summaries,
-            show_recent=show_recent,
             predict=predict,
             matchup_signature=current_signature,
         )
