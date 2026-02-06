@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import re
 import sys
 from typing import Iterable
@@ -40,43 +41,67 @@ FEATURE_COLUMNS = [
 
 def main() -> None:
     """Entry point for feature computation."""
-    print("[features] start")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.info("[features] start")
 
     config = Config()
     prefix = f"{config.BLOB_PREFIX}/silver/games/"
     season_blobs = _discover_season_blobs(config, prefix)
 
     if not season_blobs:
-        print(f"[features] error: no silver games found under {prefix}")
+        logging.error("[features] error: no silver games found under %s", prefix)
         sys.exit(1)
 
     seasons = sorted(season_blobs.keys())
-    print(f"[features] seasons discovered: {', '.join(str(s) for s in seasons)}")
+    logging.info("[features] seasons discovered: %s", ", ".join(str(s) for s in seasons))
 
+    frames: list[pd.DataFrame] = []
     for season in seasons:
         blob_name = season_blobs[season]
         games = _load_parquet(config, blob_name)
-        print(f"[features] season={season} rows_loaded={len(games)} blob={blob_name}")
+        logging.info("[features] season=%s rows_loaded=%s blob=%s", season, len(games), blob_name)
         if games.empty:
             continue
+        frames.append(games)
 
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if combined.empty:
+        logging.info("[features] no game rows loaded; exiting")
+        return
+
+    combined["game_date"] = pd.to_datetime(combined["game_date"], errors="coerce")
+    invalid_dates = combined["game_date"].isna().sum()
+    if invalid_dates:
+        logging.warning("[features] dropping rows with invalid game_date count=%s", invalid_dates)
+        combined = combined[combined["game_date"].notna()].copy()
+
+    if combined.empty:
+        logging.info("[features] all rows dropped due to invalid game_date; exiting")
+        return
+
+    combined["season"] = _canonical_season_start_year(combined["game_date"])
+
+    for season, games in combined.groupby("season", sort=True):
+        if games.empty:
+            continue
         team_games = _build_team_games(games)
         features = _compute_team_features(team_games)
         if features.empty:
-            print(f"[features] season={season} produced_rows=0")
+            logging.info("[features] season=%s produced_rows=0", season)
             continue
 
         output_blob = f"{config.BLOB_PREFIX}/silver/features/season={season}/features.parquet"
+        _log_write(season, features, output_blob)
         upload_bytes(
             config.BLOB_CONTAINER,
             output_blob,
             _to_parquet_bytes(features),
             content_type="application/octet-stream",
         )
-        print(f"[features] season={season} produced_rows={len(features)}")
-        print(f"[features] wrote {output_blob}")
+        logging.info("[features] season=%s produced_rows=%s", season, len(features))
+        logging.info("[features] wrote %s", output_blob)
 
-    print("[features] done")
+    logging.info("[features] done")
 
 
 def _discover_season_blobs(config: Config, prefix: str) -> dict[int, str]:
@@ -179,6 +204,28 @@ def _compute_team_features(team_games: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Missing required feature columns before write: {missing}")
     return output
+
+
+def _canonical_season_start_year(game_date: pd.Series) -> pd.Series:
+    dates = pd.to_datetime(game_date, errors="coerce")
+    if dates.isna().any():
+        raise ValueError("Invalid game_date encountered while computing canonical season.")
+    years = dates.dt.year
+    adjust = (dates.dt.month < 10).astype(int)
+    return (years - adjust).astype("Int64")
+
+
+def _log_write(season: int, df: pd.DataFrame, blob_name: str) -> None:
+    min_date = df["game_date"].min()
+    max_date = df["game_date"].max()
+    logging.info(
+        "[features] writing season=%s rows=%s min_game_date=%s max_game_date=%s blob=%s",
+        season,
+        len(df),
+        min_date,
+        max_date,
+        blob_name,
+    )
 
 
 def _rolling_mean(grouped: pd.core.groupby.generic.SeriesGroupBy, column: str, window: int) -> pd.Series:

@@ -37,7 +37,7 @@ def main() -> None:
         logging.info("No raw game log blobs found under %s", prefix)
         return
 
-    rows_by_season: dict[int, list[pd.DataFrame]] = {}
+    frames: list[pd.DataFrame] = []
     total_scanned = 0
     parsed_ok = 0
     total_rows = 0
@@ -118,7 +118,7 @@ def main() -> None:
         df["season"] = season
         df = _normalize_games(df)
         total_rows += len(df)
-        rows_by_season.setdefault(season, []).append(df)
+        frames.append(df)
 
     logging.info(
         "Scanned=%s Parsed=%s Total rows=%s",
@@ -139,18 +139,34 @@ def main() -> None:
         counts["missing_required"],
     )
 
-    for season, frames in rows_by_season.items():
-        combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        if combined.empty:
+    combined = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if combined.empty:
+        logging.info("No valid game rows parsed; skipping silver write.")
+        return
+
+    combined = combined.drop_duplicates(subset=["game_id", "team_id"], keep="last")
+    combined = combined.sort_values(["game_date", "team_id"]).reset_index(drop=True)
+
+    combined["game_date"] = pd.to_datetime(combined["game_date"], errors="coerce")
+    invalid_dates = combined["game_date"].isna().sum()
+    if invalid_dates:
+        logging.warning("Dropping rows with invalid game_date count=%s", invalid_dates)
+        combined = combined[combined["game_date"].notna()].copy()
+
+    if combined.empty:
+        logging.info("All rows dropped due to invalid game_date; skipping silver write.")
+        return
+
+    combined["season"] = _canonical_season_start_year(combined["game_date"])
+    combined["game_date"] = combined["game_date"].dt.date
+
+    for season, season_df in combined.groupby("season", sort=True):
+        if season_df.empty:
             continue
-
-        combined = combined.drop_duplicates(subset=["game_id", "team_id"], keep="last")
-        combined = combined.sort_values(["game_date", "team_id"]).reset_index(drop=True)
-
         blob_name = f"{config.BLOB_PREFIX}/silver/games/season={season}/games.parquet"
-        data = _to_parquet_bytes(combined)
+        _log_write(season, season_df, blob_name)
+        data = _to_parquet_bytes(season_df)
         upload_bytes(config.BLOB_CONTAINER, blob_name, data, content_type="application/octet-stream")
-        logging.info("Wrote season=%s rows=%s blob=%s", season, len(combined), blob_name)
 
 
 def _payload_to_dataframe(payload: dict) -> pd.DataFrame:
@@ -193,6 +209,28 @@ def _normalize_games(df: pd.DataFrame) -> pd.DataFrame:
     output["opp_team_abbr"] = output["matchup"].apply(_opponent_from_matchup)
 
     return output
+
+
+def _canonical_season_start_year(game_date: pd.Series) -> pd.Series:
+    dates = pd.to_datetime(game_date, errors="coerce")
+    if dates.isna().any():
+        raise ValueError("Invalid game_date encountered while computing canonical season.")
+    years = dates.dt.year
+    adjust = (dates.dt.month < 10).astype(int)
+    return (years - adjust).astype("Int64")
+
+
+def _log_write(season: int, df: pd.DataFrame, blob_name: str) -> None:
+    min_date = df["game_date"].min()
+    max_date = df["game_date"].max()
+    logging.info(
+        "Writing season=%s rows=%s min_game_date=%s max_game_date=%s blob=%s",
+        season,
+        len(df),
+        min_date,
+        max_date,
+        blob_name,
+    )
 
 
 def _opponent_from_matchup(matchup: str | None) -> str | None:
