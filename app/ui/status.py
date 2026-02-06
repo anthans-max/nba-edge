@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Any
 import json
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
+from azure_blob import download_blob_bytes, lake_prefix, list_blobs
 
 def _normalize_team(value: Any) -> str:
     if value is None:
@@ -20,6 +22,17 @@ def _normalize_team(value: Any) -> str:
     except Exception:
         pass
     return str(value).strip().upper()
+
+
+def _app_debug_enabled() -> bool:
+    value = os.getenv("APP_DEBUG", "")
+    return value.strip().lower() in {"1", "true", "yes"}
+
+
+def _load_refresh_marker() -> dict[str, Any] | None:
+    marker_blob = f"{lake_prefix()}_meta/refresh_last_success.json"
+    payload = download_blob_bytes(marker_blob)
+    return json.loads(payload)
 
 
 def render_status(
@@ -34,6 +47,12 @@ def render_status(
     window: int | None = None,
     team_a_is_home: bool | None = None,
 ) -> None:
+    debug_enabled = _app_debug_enabled()
+    debug_mode = False
+    if debug_enabled:
+        debug_mode = st.sidebar.checkbox(
+            "Debug mode", value=False, key="debug_mode_status"
+        )
     st.subheader("Model Snapshot")
     selected_season = (
         selected_season
@@ -83,6 +102,24 @@ def render_status(
     st.subheader("Model Training Snapshot")
     _render_training_snapshot()
 
+    st.subheader("Last Refresh")
+    try:
+        marker = _load_refresh_marker()
+    except Exception as exc:
+        if debug_enabled and debug_mode:
+            st.info("No refresh marker found yet.")
+            st.caption(f"Debug: {exc}")
+        else:
+            st.info("No refresh marker found yet.")
+        marker = None
+
+    if marker:
+        refresh_cols = st.columns(4)
+        refresh_cols[0].metric("Last refresh (UTC)", marker.get("timestamp_utc") or "—")
+        refresh_cols[1].metric("Season", marker.get("season") or "—")
+        refresh_cols[2].metric("Rows", marker.get("rows") or "—")
+        refresh_cols[3].metric("Max game date", marker.get("max_game_date") or "—")
+
     st.subheader("Recent games used")
     ctx = st.session_state.get("matchup_ctx")
     if not ctx or "games_df" not in ctx:
@@ -113,65 +150,171 @@ def render_status(
             recent_df.get("game_date"), errors="coerce"
         )
         recent_team_id = pd.to_numeric(recent_df.get("team_id"), errors="coerce")
+        if team_a_id is not None:
+            recent_a = (
+                recent_df[recent_team_id == int(team_a_id)]
+                .sort_values("game_date_dt", ascending=False)
+                .head(window or 0)
+            )
+        else:
+            team_a_norm = _normalize_team(team_a or "")
+            recent_a = (
+                recent_df[recent_df["team_abbr"] == team_a_norm]
+                .sort_values("game_date_dt", ascending=False)
+                .head(window or 0)
+            )
+        if team_b_id is not None:
+            recent_b = (
+                recent_df[recent_team_id == int(team_b_id)]
+                .sort_values("game_date_dt", ascending=False)
+                .head(window or 0)
+            )
+        else:
+            team_b_norm = _normalize_team(team_b or "")
+            recent_b = (
+                recent_df[recent_df["team_abbr"] == team_b_norm]
+                .sort_values("game_date_dt", ascending=False)
+                .head(window or 0)
+            )
+
+        if debug_mode:
+            with st.expander("Debug: Recent games used", expanded=True):
+                selected_season_value = selected_season
+                storage_account = os.getenv("AZURE_STORAGE_ACCOUNT", "anthansunderrgaddf")
+                storage_container = os.getenv("AZURE_STORAGE_CONTAINER", "nba-edge")
+                lake = os.getenv("AZURE_LAKE_PREFIX", "lake/")
+                if not lake.endswith("/"):
+                    lake = f"{lake}/"
+                st.write(
+                    f"Storage account: `{storage_account}` | "
+                    f"Container: `{storage_container}` | "
+                    f"Lake prefix: `{lake}`"
+                )
+
+                blob_name = None
+                features_prefix = None
+                if selected_season_value is not None:
+                    try:
+                        prefix = lake_prefix()
+                        blob_name = (
+                            f"{prefix}silver/games/season={int(selected_season_value)}/games.parquet"
+                        )
+                        features_prefix = (
+                            f"{prefix}silver/features/season={int(selected_season_value)}/"
+                        )
+                    except Exception as exc:
+                        st.write(f"Failed to build blob path: {exc}")
+
+                if blob_name:
+                    st.write("Games parquet path:")
+                    st.code(blob_name)
+                    try:
+                        blobs = list_blobs(
+                            f"{lake_prefix()}silver/games/season={int(selected_season_value)}/"
+                        )
+                        game_blob = next(
+                            (b for b in blobs if str(b.get("name", "")).endswith("games.parquet")),
+                            None,
+                        )
+                        if game_blob:
+                            st.write(
+                                "Games parquet last_modified: "
+                                f"{game_blob.get('last_modified_utc')} | size_bytes="
+                                f"{game_blob.get('size_bytes')}"
+                            )
+                    except Exception as exc:
+                        st.write(f"Failed to read blob metadata: {exc}")
+
+                if features_prefix:
+                    st.write("Features parquet prefix:")
+                    st.code(features_prefix)
+
+                raw_df = ctx.get("games_df")
+                raw_dates = (
+                    pd.to_datetime(raw_df.get("game_date"), errors="coerce")
+                    if raw_df is not None
+                    else pd.Series([], dtype="datetime64[ns]")
+                )
+                raw_max = raw_dates.max() if not raw_dates.empty else None
+                raw_post = (raw_dates > pd.Timestamp("2026-02-01")).sum()
+
+                post_dates = recent_df.get("game_date_dt")
+                post_max = (
+                    post_dates.max() if post_dates is not None and not post_dates.empty else None
+                )
+                post_post = (
+                    (post_dates > pd.Timestamp("2026-02-01")).sum()
+                    if post_dates is not None
+                    else 0
+                )
+
+                st.write(
+                    f"Raw rows: {len(raw_df) if raw_df is not None else 0} | "
+                    f"raw max_date: {raw_max} | "
+                    f"raw post-2026-02-01 count: {raw_post}"
+                )
+                st.write(
+                    f"Post-normalization rows: {len(recent_df)} | "
+                    f"post max_date: {post_max} | "
+                    f"post-2026-02-01 count: {post_post}"
+                )
+                if "game_date" in recent_df.columns:
+                    st.write(f"game_date dtype: {recent_df['game_date'].dtype}")
+                st.write(f"game_date_dt dtype: {recent_df['game_date_dt'].dtype}")
+
+                top_recent = (
+                    recent_df.sort_values("game_date_dt", ascending=False)
+                    .head(10)
+                    .loc[:, [c for c in ["game_date_dt", "game_date", "team_abbr", "opp_team_abbr", "pts", "plus_minus", "wl"] if c in recent_df.columns]]
+                )
+                st.write("Top 10 most recent rows (post-normalization):")
+                st.dataframe(top_recent, use_container_width=True)
+
+                st.write(
+                    f"Team A filtered rows: {len(recent_a)} | "
+                    f"max_date: {recent_a['game_date_dt'].max() if not recent_a.empty else None}"
+                )
+                st.write(
+                    f"Team B filtered rows: {len(recent_b)} | "
+                    f"max_date: {recent_b['game_date_dt'].max() if not recent_b.empty else None}"
+                )
         col_a, col_b = st.columns(2)
         with col_a:
             st.markdown(f"**{team_a or 'Team A'}**")
-            if team_a_id is not None:
-                recent_a = (
-                    recent_df[recent_team_id == int(team_a_id)]
-                    .sort_values("game_date_dt", ascending=False)
-                    .head(window or 0)
-                )
-            else:
-                team_a_norm = _normalize_team(team_a or "")
-                recent_a = (
-                    recent_df[recent_df["team_abbr"] == team_a_norm]
-                    .sort_values("game_date_dt", ascending=False)
-                    .head(window or 0)
-                )
             if not recent_a.empty:
-                recent_a = recent_a.assign(
-                    date=recent_a["game_date_dt"].dt.strftime("%Y-%m-%d").fillna(
-                        recent_a.get("game_date").astype(str)
-                    ),
+                recent_a_display = recent_a.assign(
+                    date=recent_a["game_date_dt"]
+                    .dt.strftime("%Y-%m-%d")
+                    .fillna(recent_a.get("game_date").astype(str)),
                     opponent=recent_a.get("opp_team_abbr"),
                     home_away=recent_a.get("is_home").map(
                         lambda v: "Home" if bool(v) else "Away"
                     ),
                 )
-                recent_a = recent_a[
+                recent_a_display = recent_a_display[
                     ["date", "opponent", "home_away", "pts", "plus_minus", "wl"]
                 ].copy()
-            st.dataframe(recent_a, use_container_width=True)
+                st.dataframe(recent_a_display, use_container_width=True)
+            else:
+                st.dataframe(recent_a, use_container_width=True)
         with col_b:
             st.markdown(f"**{team_b or 'Team B'}**")
-            if team_b_id is not None:
-                recent_b = (
-                    recent_df[recent_team_id == int(team_b_id)]
-                    .sort_values("game_date_dt", ascending=False)
-                    .head(window or 0)
-                )
-            else:
-                team_b_norm = _normalize_team(team_b or "")
-                recent_b = (
-                    recent_df[recent_df["team_abbr"] == team_b_norm]
-                    .sort_values("game_date_dt", ascending=False)
-                    .head(window or 0)
-                )
             if not recent_b.empty:
-                recent_b = recent_b.assign(
-                    date=recent_b["game_date_dt"].dt.strftime("%Y-%m-%d").fillna(
-                        recent_b.get("game_date").astype(str)
-                    ),
+                recent_b_display = recent_b.assign(
+                    date=recent_b["game_date_dt"]
+                    .dt.strftime("%Y-%m-%d")
+                    .fillna(recent_b.get("game_date").astype(str)),
                     opponent=recent_b.get("opp_team_abbr"),
                     home_away=recent_b.get("is_home").map(
                         lambda v: "Home" if bool(v) else "Away"
                     ),
                 )
-                recent_b = recent_b[
+                recent_b_display = recent_b_display[
                     ["date", "opponent", "home_away", "pts", "plus_minus", "wl"]
                 ].copy()
-            st.dataframe(recent_b, use_container_width=True)
+                st.dataframe(recent_b_display, use_container_width=True)
+            else:
+                st.dataframe(recent_b, use_container_width=True)
 
 
 def _render_training_snapshot() -> None:
