@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from azure_blob import get_blob_metadata, lake_prefix
 from ui.chat import init_chat_state, render_chat
 from ui.matchup import (
     list_available_feature_seasons,
@@ -16,6 +17,7 @@ from ui.matchup import (
     render_matchup,
 )
 from ui.status import render_status
+from ui.status_utils import marker_signature
 
 
 st.set_page_config(layout="wide", page_title="NBA Edge (V1)", page_icon="🏀")
@@ -74,6 +76,22 @@ def main() -> None:
     except Exception as exc:
         season_error = exc
 
+    marker_sig: str | None = None
+    try:
+        marker_meta = get_blob_metadata(f"{lake_prefix()}_meta/refresh_last_success.json")
+        marker_sig = marker_signature(marker_meta, None)
+    except Exception:
+        marker_sig = None
+
+    if marker_sig:
+        previous_marker_sig = st.session_state.get("refresh_marker_signature")
+        if previous_marker_sig != marker_sig:
+            st.session_state.pop("matchup_ctx", None)
+            st.session_state.pop("prediction", None)
+            st.session_state.pop("matchup_context", None)
+            st.session_state.pop("last_matchup_result", None)
+            st.session_state["refresh_marker_signature"] = marker_sig
+
     selected_season = st.session_state.get("selected_season")
 
     window = int(st.session_state.get("window", 10))
@@ -82,7 +100,7 @@ def main() -> None:
     load_error: Exception | None = None
     if selected_season is not None:
         try:
-            games_df = load_games(int(selected_season))
+            games_df = load_games(int(selected_season), marker_signature=marker_sig)
         except Exception as exc:
             load_error = exc
 

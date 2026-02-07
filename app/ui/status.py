@@ -11,7 +11,15 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from azure_blob import download_blob_bytes, lake_prefix, list_blobs
+from azure_blob import (
+    download_blob_bytes,
+    get_blob_metadata,
+    lake_prefix,
+    list_blobs,
+    storage_account,
+    storage_container,
+)
+from ui.status_utils import marker_signature, parse_refresh_marker_payload
 
 def _normalize_team(value: Any) -> str:
     if value is None:
@@ -29,10 +37,169 @@ def _app_debug_enabled() -> bool:
     return value.strip().lower() in {"1", "true", "yes"}
 
 
-def _load_refresh_marker() -> dict[str, Any] | None:
+def env_truthy(name: str) -> bool:
+    value = os.getenv(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _load_refresh_marker() -> tuple[dict[str, Any] | None, dict[str, Any] | None, Exception | None]:
     marker_blob = f"{lake_prefix()}_meta/refresh_last_success.json"
-    payload = download_blob_bytes(marker_blob)
-    return json.loads(payload)
+    meta: dict[str, Any] | None = None
+    payload: dict[str, Any] | None = None
+    err: Exception | None = None
+    try:
+        meta = get_blob_metadata(marker_blob)
+    except Exception as exc:
+        err = exc
+    if meta is not None:
+        try:
+            raw = download_blob_bytes(marker_blob)
+            payload = parse_refresh_marker_payload(raw)
+        except Exception as exc:
+            err = err or exc
+    return meta, payload, err
+
+
+def _resolve_app_version() -> str:
+    env_sha = (
+        os.getenv("GIT_SHA")
+        or os.getenv("GITHUB_SHA")
+        or os.getenv("SOURCE_VERSION")
+    )
+    if env_sha:
+        return env_sha[:12]
+
+    head_path = Path(".git") / "HEAD"
+    if head_path.exists():
+        try:
+            head = head_path.read_text(encoding="utf-8").strip()
+            if head.startswith("ref:"):
+                ref = head.split(" ", 1)[1].strip()
+                ref_path = Path(".git") / ref
+                if ref_path.exists():
+                    ref_sha = ref_path.read_text(encoding="utf-8").strip()
+                    if ref_sha:
+                        return ref_sha[:12]
+            elif head:
+                return head[:12]
+        except Exception:
+            pass
+
+    image_tag = (
+        os.getenv("IMAGE_TAG")
+        or os.getenv("CONTAINER_IMAGE")
+        or os.getenv("DOCKER_IMAGE")
+    )
+    if image_tag:
+        return image_tag
+    return "unknown"
+
+
+def _format_refresh_date(
+    marker: dict[str, Any] | None, meta: dict[str, Any] | None
+) -> str:
+    timestamp = None
+    if marker:
+        raw = marker.get("timestamp_utc")
+        if isinstance(raw, str) and raw:
+            timestamp = raw
+    if not timestamp and meta:
+        raw_meta = meta.get("last_modified_utc")
+        if isinstance(raw_meta, datetime):
+            return raw_meta.astimezone(timezone.utc).date().isoformat()
+        if isinstance(raw_meta, str) and raw_meta:
+            timestamp = raw_meta
+    if timestamp:
+        try:
+            normalized = timestamp.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            return parsed.date().isoformat()
+        except Exception:
+            pass
+    return "—"
+
+
+def _render_refresh_values(
+    *,
+    refresh_date: str,
+    season: Any,
+    rows: Any,
+    max_game_date: Any,
+) -> None:
+    labels = ["Last refresh (UTC)", "Season", "Rows", "Max game date"]
+    values = [
+        refresh_date or "—",
+        season if season is not None else "—",
+        rows if rows is not None else "—",
+        max_game_date if max_game_date is not None else "—",
+    ]
+    cols = st.columns(4)
+    for col, label, value in zip(cols, labels, values, strict=True):
+        with col:
+            st.markdown(
+                f"""
+<div style="line-height:1.2;">
+  <div style="font-size:0.9rem;color:#6b7280;">{label}</div>
+  <div style="font-size:0.9rem;font-weight:500;">{value}</div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+
+def _render_refresh_debug(
+    *,
+    marker_blob: str,
+    meta: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
+    err: Exception | None,
+) -> None:
+    with st.expander("Debug: Refresh marker", expanded=False):
+        version = _resolve_app_version()
+        st.write(f"App version: `{version}`")
+        st.write(f"Storage account (resolved): `{storage_account()}`")
+        st.write(f"Storage container (resolved): `{storage_container()}`")
+        st.write(f"Lake prefix (resolved): `{lake_prefix()}`")
+        st.write(
+            "Env STORAGE_ACCOUNT_NAME: "
+            f"`{os.getenv('STORAGE_ACCOUNT_NAME') or '—'}`"
+        )
+        st.write(
+            "Env STORAGE_CONTAINER_NAME: "
+            f"`{os.getenv('STORAGE_CONTAINER_NAME') or '—'}`"
+        )
+        st.write(
+            "Env AZURE_STORAGE_ACCOUNT: "
+            f"`{os.getenv('AZURE_STORAGE_ACCOUNT') or '—'}`"
+        )
+        st.write(
+            "Env AZURE_STORAGE_CONTAINER: "
+            f"`{os.getenv('AZURE_STORAGE_CONTAINER') or '—'}`"
+        )
+        st.write(
+            "Env AZURE_LAKE_PREFIX: "
+            f"`{os.getenv('AZURE_LAKE_PREFIX') or '—'}`"
+        )
+        st.write(f"Env BLOB_PREFIX: `{os.getenv('BLOB_PREFIX') or '—'}`")
+        st.write(f"Marker blob path: `{marker_blob}`")
+
+        exists = meta is not None
+        st.write(f"Marker blob exists: `{exists}`")
+        if meta:
+            st.write(
+                "Marker last_modified_utc: "
+                f"`{meta.get('last_modified_utc') or '—'}`"
+            )
+            st.write(f"Marker etag: `{meta.get('etag') or '—'}`")
+
+        if payload:
+            st.write("Marker payload:")
+            st.code(json.dumps(payload, indent=2, sort_keys=True))
+            signature = marker_signature(meta, payload)
+            if signature:
+                st.write(f"Marker cache signature: `{signature}`")
+        elif err:
+            st.caption(f"Marker read error: {err}")
 
 
 def render_status(
@@ -103,22 +270,42 @@ def render_status(
     _render_training_snapshot()
 
     st.subheader("Last Refresh")
+    marker_blob = f"{lake_prefix()}_meta/refresh_last_success.json"
     try:
-        marker = _load_refresh_marker()
+        marker_meta, marker, marker_err = _load_refresh_marker()
     except Exception as exc:
         if debug_enabled and debug_mode:
             st.info("No refresh marker found yet.")
             st.caption(f"Debug: {exc}")
         else:
             st.info("No refresh marker found yet.")
+        marker_meta = None
         marker = None
+        marker_err = exc
 
     if marker:
-        refresh_cols = st.columns(4)
-        refresh_cols[0].metric("Last refresh (UTC)", marker.get("timestamp_utc") or "—")
-        refresh_cols[1].metric("Season", marker.get("season") or "—")
-        refresh_cols[2].metric("Rows", marker.get("rows") or "—")
-        refresh_cols[3].metric("Max game date", marker.get("max_game_date") or "—")
+        refresh_date = _format_refresh_date(marker, marker_meta)
+        _render_refresh_values(
+            refresh_date=refresh_date,
+            season=marker.get("season"),
+            rows=marker.get("rows"),
+            max_game_date=marker.get("max_game_date"),
+        )
+    else:
+        _render_refresh_values(
+            refresh_date=_format_refresh_date(marker, marker_meta),
+            season=None,
+            rows=None,
+            max_game_date=None,
+        )
+
+    if env_truthy("SHOW_DEBUG_REFRESH_MARKER"):
+        _render_refresh_debug(
+            marker_blob=marker_blob,
+            meta=marker_meta,
+            payload=marker,
+            err=marker_err,
+        )
 
     st.subheader("Recent games used")
     ctx = st.session_state.get("matchup_ctx")

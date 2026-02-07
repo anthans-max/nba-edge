@@ -47,10 +47,10 @@ SEASON_RE = re.compile(r"/season=(\d{4})/")
 
 
 @st.cache_data(show_spinner=False)
-def load_games(season: int) -> pd.DataFrame:
+def load_games(season: int, marker_signature: str | None = None) -> pd.DataFrame:
     prefix = lake_prefix()
     blob_name = f"{prefix}silver/games/season={season}/games.parquet"
-    df = read_parquet_from_blob(blob_name)
+    df = read_parquet_from_blob(blob_name, cache_buster=marker_signature)
     df = df.copy()
     df.columns = [str(c).lower() for c in df.columns]
     assert "team_abbr" in df.columns, f"team_abbr missing; columns={df.columns.tolist()}"

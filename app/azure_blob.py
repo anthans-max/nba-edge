@@ -11,18 +11,27 @@ import pandas as pd
 import streamlit as st
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
+from azure.core.exceptions import ResourceNotFoundError
 
 
 def _storage_account() -> str:
-    return os.getenv("AZURE_STORAGE_ACCOUNT", "anthansunderrgaddf")
+    return (
+        os.getenv("AZURE_STORAGE_ACCOUNT")
+        or os.getenv("STORAGE_ACCOUNT_NAME")
+        or "anthansunderrgaddf"
+    )
 
 
 def _container_name() -> str:
-    return os.getenv("AZURE_STORAGE_CONTAINER", "nba-edge")
+    return (
+        os.getenv("AZURE_STORAGE_CONTAINER")
+        or os.getenv("STORAGE_CONTAINER_NAME")
+        or "nba-edge"
+    )
 
 
 def _lake_prefix() -> str:
-    prefix = os.getenv("AZURE_LAKE_PREFIX", "lake/")
+    prefix = os.getenv("AZURE_LAKE_PREFIX") or os.getenv("BLOB_PREFIX") or "lake/"
     return prefix if prefix.endswith("/") else f"{prefix}/"
 
 
@@ -52,8 +61,23 @@ def download_blob_bytes(blob_name: str) -> bytes:
     return blob.download_blob().readall()
 
 
+def get_blob_metadata(blob_name: str) -> dict | None:
+    client = get_blob_service_client()
+    blob = client.get_blob_client(container=_container_name(), blob=blob_name)
+    try:
+        props = blob.get_blob_properties()
+    except ResourceNotFoundError:
+        return None
+    return {
+        "name": blob_name,
+        "size_bytes": props.size,
+        "last_modified_utc": props.last_modified,
+        "etag": props.etag,
+    }
+
+
 @st.cache_data(show_spinner=False)
-def read_parquet_from_blob(blob_name: str) -> pd.DataFrame:
+def read_parquet_from_blob(blob_name: str, cache_buster: str | None = None) -> pd.DataFrame:
     data = download_blob_bytes(blob_name)
     return pd.read_parquet(io.BytesIO(data))
 
@@ -91,3 +115,11 @@ def render_exception(err: Exception) -> None:
 
 def lake_prefix() -> str:
     return _lake_prefix()
+
+
+def storage_account() -> str:
+    return _storage_account()
+
+
+def storage_container() -> str:
+    return _container_name()
